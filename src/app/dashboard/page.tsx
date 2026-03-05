@@ -222,7 +222,7 @@ function DashboardContent() {
                 <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={30} />
                 <Tooltip
                   contentStyle={{ borderRadius: 10, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', fontSize: 12 }}
-                  formatter={(v: number) => [`${v} mi`, 'Distance']}
+                  formatter={(v: number | undefined) => [`${v ?? 0} mi`, 'Distance']}
                 />
                 <Bar dataKey="miles" fill="#6366f1" radius={[6, 6, 0, 0]} />
               </BarChart>
@@ -244,7 +244,7 @@ function DashboardContent() {
                   <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} width={35} domain={['auto', 'auto']} />
                   <Tooltip
                     contentStyle={{ borderRadius: 10, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', fontSize: 12 }}
-                    formatter={(v: number) => [`${v} bpm`, 'Avg HR']}
+                    formatter={(v: number | undefined) => [`${v ?? 0} bpm`, 'Avg HR']}
                   />
                   <Line type="monotone" dataKey="hr" stroke="#ef4444" strokeWidth={2} dot={{ r: 3, fill: '#ef4444' }} activeDot={{ r: 5 }} />
                 </LineChart>
@@ -272,7 +272,7 @@ function DashboardContent() {
                   />
                   <Tooltip
                     contentStyle={{ borderRadius: 10, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', fontSize: 12 }}
-                    formatter={(v: number) => [formatPace(v) + ' /mi', 'Pace']}
+                    formatter={(v: number | undefined) => [formatPace(v ?? 0) + ' /mi', 'Pace']}
                   />
                   <Line type="monotone" dataKey="pace" stroke="#6366f1" strokeWidth={2} dot={{ r: 3, fill: '#6366f1' }} activeDot={{ r: 5 }} />
                 </LineChart>
