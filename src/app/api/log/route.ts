@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin";
 import { RunLogSchema, PlannedRunSchema, TrainingPlanSchema } from "@/lib/schemas";
 import type { UserProfile, RunLog } from "@/lib/schemas";
 import { buildPrompt, PROMPT_VERSION } from "@/lib/prompts";
@@ -45,9 +45,9 @@ async function checkRateLimit(
   uid: string,
   today: string
 ): Promise<{ allowed: boolean; remaining: number }> {
-  const usageRef = adminDb.doc(`users/${uid}/usage/${today}`);
+  const usageRef = getAdminDb().doc(`users/${uid}/usage/${today}`);
 
-  return adminDb.runTransaction(async (tx) => {
+  return getAdminDb().runTransaction(async (tx) => {
     const snap = await tx.get(usageRef);
     const current = snap.exists ? (snap.data()!.planGenerations as number) : 0;
 
@@ -78,7 +78,7 @@ async function getVerifiedUid(req: NextRequest): Promise<string | null> {
 
   const token = authHeader.slice(7); // strip "Bearer "
   try {
-    const decoded = await adminAuth.verifyIdToken(token);
+    const decoded = await getAdminAuth().verifyIdToken(token);
     return decoded.uid;
   } catch {
     return null;
@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
   //
   // savedAt is stored as an ISO string (not serverTimestamp) so it survives
   // JSON serialization without the stripTimestamps treatment.
-  await adminDb.doc(`users/${uid}/logs/${log.date}`).set({
+  await getAdminDb().doc(`users/${uid}/logs/${log.date}`).set({
     ...log,
     savedAt: new Date().toISOString(),
   });
@@ -158,8 +158,8 @@ export async function POST(req: NextRequest) {
   // Profile is at users/{uid} (the user document itself, not a subcollection).
   // Logs are ordered by date descending so index 0 is always the most recent.
   const [profileSnap, logsSnap] = await Promise.all([
-    adminDb.doc(`users/${uid}`).get(),
-    adminDb
+    getAdminDb().doc(`users/${uid}`).get(),
+    getAdminDb()
       .collection(`users/${uid}/logs`)
       .orderBy("date", "desc")
       .limit(14)
@@ -311,7 +311,7 @@ export async function POST(req: NextRequest) {
   // Using today's date as the document ID means one plan per day per user.
   // Regenerating on the same day overwrites the previous plan — consistent
   // with the one-log-per-day approach used for run logs.
-  await adminDb.doc(`users/${uid}/plans/${today}`).set(plan);
+  await getAdminDb().doc(`users/${uid}/plans/${today}`).set(plan);
 
   // ── Step 9: Return the plan ───────────────────────────────────────────────────
   return NextResponse.json(
