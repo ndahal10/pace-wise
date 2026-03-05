@@ -8,7 +8,13 @@ import {
   signInWithPopup,
   GoogleAuthProvider,
 } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+
+async function getRedirectPath(uid: string): Promise<string> {
+  const snap = await getDoc(doc(db, 'users', uid));
+  return snap.exists() ? '/dashboard' : '/onboarding';
+}
 
 export default function Login() {
   const router = useRouter();
@@ -24,12 +30,15 @@ export default function Login() {
     setLoading(true);
 
     try {
+      let uid: string;
       if (mode === 'signin') {
-        await signInWithEmailAndPassword(auth, email, password);
+        const cred = await signInWithEmailAndPassword(auth, email, password);
+        uid = cred.user.uid;
       } else {
-        await createUserWithEmailAndPassword(auth, email, password);
+        const cred = await createUserWithEmailAndPassword(auth, email, password);
+        uid = cred.user.uid;
       }
-      router.push('/dashboard');
+      router.push(await getRedirectPath(uid));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Something went wrong.';
       setError(formatFirebaseError(message));
@@ -43,8 +52,8 @@ export default function Login() {
     setLoading(true);
     try {
       const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-      router.push('/dashboard');
+      const cred = await signInWithPopup(auth, provider);
+      router.push(await getRedirectPath(cred.user.uid));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Something went wrong.';
       setError(formatFirebaseError(message));
