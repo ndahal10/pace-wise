@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider,
 } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
@@ -23,6 +24,22 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Handle the result when returning from Google redirect
+  useEffect(() => {
+    setLoading(true);
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result?.user) {
+          router.push(await getRedirectPath(result.user.uid));
+        }
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'Something went wrong.';
+        setError(formatFirebaseError(message));
+      })
+      .finally(() => setLoading(false));
+  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,12 +69,11 @@ export default function Login() {
     setLoading(true);
     try {
       const provider = new GoogleAuthProvider();
-      const cred = await signInWithPopup(auth, provider);
-      router.push(await getRedirectPath(cred.user.uid));
+      await signInWithRedirect(auth, provider);
+      // Page will redirect — loading stays true until redirect completes
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Something went wrong.';
       setError(formatFirebaseError(message));
-    } finally {
       setLoading(false);
     }
   };

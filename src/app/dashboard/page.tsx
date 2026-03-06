@@ -186,7 +186,7 @@ function DashboardContent() {
         )}
 
         {/* Stats row */}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-3 gap-2 sm:gap-4">
           {[
             {
               label: 'Miles this week',
@@ -203,9 +203,9 @@ function DashboardContent() {
                 : '—',
             },
           ].map(stat => (
-            <div key={stat.label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 text-center">
-              <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
-              <p className="text-xs text-gray-400 mt-1">{stat.label}</p>
+            <div key={stat.label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 sm:p-4 text-center">
+              <p className="text-lg sm:text-2xl font-bold text-gray-900 truncate">{stat.value}</p>
+              <p className="text-xs text-gray-400 mt-1 leading-tight">{stat.label}</p>
             </div>
           ))}
         </div>
