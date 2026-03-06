@@ -1,12 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signInWithRedirect,
-  getRedirectResult,
+  signInWithPopup,
   GoogleAuthProvider,
 } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase';
@@ -24,22 +23,6 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  // Handle the result when returning from Google redirect
-  useEffect(() => {
-    setLoading(true);
-    getRedirectResult(auth)
-      .then(async (result) => {
-        if (result?.user) {
-          router.push(await getRedirectPath(result.user.uid));
-        }
-      })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'Something went wrong.';
-        setError(formatFirebaseError(message));
-      })
-      .finally(() => setLoading(false));
-  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,11 +52,12 @@ export default function Login() {
     setLoading(true);
     try {
       const provider = new GoogleAuthProvider();
-      await signInWithRedirect(auth, provider);
-      // Page will redirect — loading stays true until redirect completes
+      const cred = await signInWithPopup(auth, provider);
+      router.push(await getRedirectPath(cred.user.uid));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Something went wrong.';
       setError(formatFirebaseError(message));
+    } finally {
       setLoading(false);
     }
   };
@@ -192,8 +176,15 @@ function formatFirebaseError(message: string): string {
   if (message.includes('invalid-email')) {
     return 'Please enter a valid email address.';
   }
-  if (message.includes('popup-closed-by-user')) {
+  if (message.includes('popup-closed-by-user') || message.includes('cancelled-popup-request')) {
     return 'Sign-in popup was closed. Please try again.';
   }
+  if (message.includes('unauthorized-domain')) {
+    return 'This domain is not authorised for Google sign-in. Add it to Firebase Console → Authentication → Authorized Domains.';
+  }
+  if (message.includes('operation-not-allowed')) {
+    return 'Google sign-in is not enabled. Enable it in Firebase Console → Authentication → Sign-in providers.';
+  }
+  console.error('Unhandled Firebase auth error:', message);
   return 'Something went wrong. Please try again.';
 }
