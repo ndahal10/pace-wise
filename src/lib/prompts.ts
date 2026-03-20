@@ -14,7 +14,7 @@ import type { UserProfile, RunLog } from "@/lib/schemas";
 // "v1" would be readable but doesn't satisfy the schema's /^\d+\.\d+\.\d+$/
 // constraint, so we use "1.0.0" instead.
 
-export const PROMPT_VERSION = "1.0.0";
+export const PROMPT_VERSION = "1.2.0";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 //
@@ -35,54 +35,92 @@ export interface PromptPayload {
 // The full log array is still passed as a secondary block for Claude to
 // reference individual outlier sessions if needed.
 
+function formatPace(minsPerMile: number): string {
+  const m = Math.floor(minsPerMile);
+  const s = Math.round((minsPerMile - m) * 60).toString().padStart(2, "0");
+  return `${m}:${s}`;
+}
+
 function summariseLogs(logs: RunLog[]): string {
   if (logs.length === 0) return "No recent runs logged.";
 
-  const totalMiles = logs.reduce((sum, l) => sum + l.distanceMiles, 0);
-  const avgMiles = totalMiles / logs.length;
+  // Sort chronologically for trend analysis (oldest → newest)
+  const sorted = [...logs].sort((a, b) => a.date.localeCompare(b.date));
 
-  const paceEntries = logs.filter((l) => l.averagePaceMinsPerMile != null);
+  const totalMiles = sorted.reduce((sum, l) => sum + l.distanceMiles, 0);
+  const avgMiles = totalMiles / sorted.length;
+  const longestRun = Math.max(...sorted.map((l) => l.distanceMiles));
+
+  const paceEntries = sorted.filter((l) => l.averagePaceMinsPerMile != null);
   const avgPace =
     paceEntries.length > 0
-      ? paceEntries.reduce((sum, l) => sum + l.averagePaceMinsPerMile!, 0) /
-        paceEntries.length
+      ? paceEntries.reduce((sum, l) => sum + l.averagePaceMinsPerMile!, 0) / paceEntries.length
       : null;
 
-  const hrEntries = logs.filter((l) => l.averageHeartRate != null);
+  const hrEntries = sorted.filter((l) => l.averageHeartRate != null);
   const avgHR =
     hrEntries.length > 0
-      ? Math.round(
-          hrEntries.reduce((sum, l) => sum + l.averageHeartRate!, 0) /
-            hrEntries.length
-        )
+      ? Math.round(hrEntries.reduce((sum, l) => sum + l.averageHeartRate!, 0) / hrEntries.length)
+      : null;
+  const maxHR =
+    sorted.some((l) => l.maxHeartRate != null)
+      ? Math.max(...sorted.filter((l) => l.maxHeartRate != null).map((l) => l.maxHeartRate!))
+      : null;
+
+  const cadenceEntries = sorted.filter((l) => l.cadence != null);
+  const avgCadence =
+    cadenceEntries.length > 0
+      ? Math.round(cadenceEntries.reduce((sum, l) => sum + l.cadence!, 0) / cadenceEntries.length)
       : null;
 
   // Infer weekly frequency from the date span of the logs
-  const dates = logs.map((l) => l.date).sort();
+  const dates = sorted.map((l) => l.date);
   const daySpan =
-    (new Date(dates[dates.length - 1]).getTime() -
-      new Date(dates[0]).getTime()) /
+    (new Date(dates[dates.length - 1]).getTime() - new Date(dates[0]).getTime()) /
     (1000 * 60 * 60 * 24);
   const weeksSpan = Math.max(daySpan / 7, 1);
-  const runsPerWeek = (logs.length / weeksSpan).toFixed(1);
+  const runsPerWeek = (sorted.length / weeksSpan).toFixed(1);
 
   const lines = [
-    `Runs logged: ${logs.length} over the past ~${Math.round(weeksSpan)} week(s)`,
+    `Runs logged: ${sorted.length} over the past ~${Math.round(weeksSpan)} week(s)`,
     `Average runs per week: ${runsPerWeek}`,
     `Total distance: ${totalMiles.toFixed(1)} miles`,
     `Average distance per run: ${avgMiles.toFixed(1)} miles`,
+    `Longest run: ${longestRun.toFixed(1)} miles`,
   ];
 
   if (avgPace !== null) {
-    const mins = Math.floor(avgPace);
-    const secs = Math.round((avgPace - mins) * 60)
-      .toString()
-      .padStart(2, "0");
-    lines.push(`Average pace: ${mins}:${secs} min/mile`);
+    lines.push(`Average pace: ${formatPace(avgPace)} min/mile`);
+
+    // Pace trend: compare oldest half vs newest half
+    if (paceEntries.length >= 4) {
+      const mid = Math.floor(paceEntries.length / 2);
+      const olderAvg = paceEntries.slice(0, mid).reduce((s, l) => s + l.averagePaceMinsPerMile!, 0) / mid;
+      const newerAvg = paceEntries.slice(mid).reduce((s, l) => s + l.averagePaceMinsPerMile!, 0) / (paceEntries.length - mid);
+      const diff = olderAvg - newerAvg; // positive = getting faster
+      if (Math.abs(diff) > 0.1) {
+        lines.push(`Pace trend: ${diff > 0 ? "improving" : "slowing"} (~${Math.abs(diff).toFixed(1)} min/mile over the window)`);
+      }
+    }
   }
 
   if (avgHR !== null) {
     lines.push(`Average heart rate: ${avgHR} bpm`);
+  }
+  if (maxHR !== null) {
+    lines.push(`Peak heart rate recorded: ${maxHR} bpm`);
+  }
+  if (avgCadence !== null) {
+    lines.push(`Average cadence: ${avgCadence} spm`);
+  }
+
+  // Collect notes from recent runs to give Claude context on perceived effort
+  const recentNotes = sorted
+    .filter((l) => l.notes?.trim())
+    .slice(-3) // last 3 runs with notes
+    .map((l) => `  ${l.date}: "${l.notes}"`);
+  if (recentNotes.length > 0) {
+    lines.push(`Recent run notes:\n${recentNotes.join("\n")}`);
   }
 
   return lines.join("\n");
@@ -138,8 +176,10 @@ outside the JSON. The object must match this exact shape:
       "description": <string, max 300 chars — specific instruction for this session>
     }
   ],
-  "reasoning": <string — explain why you designed the plan this way, referencing the \
-athlete's data. Max 2000 chars.>
+  "reasoning": <string — exactly 3 to 5 bullet points, each on its own line, starting \
+with "• ". Each bullet is one concise insight (max 120 chars) explaining a specific \
+decision: mileage target, workout type choice, injury consideration, or goal alignment. \
+No intro sentence, no closing sentence — bullets only.>
 }
 
 Constraints:

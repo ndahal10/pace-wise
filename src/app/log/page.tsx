@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { auth } from '@/lib/firebase';
 import { RunLogSchema } from '@/lib/schemas';
 import type { TrainingPlan } from '@/lib/schemas';
@@ -58,15 +59,42 @@ function Field({
 
 // ─── Plan view ────────────────────────────────────────────────────────────────
 
-const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DAY_NAMES_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 const TYPE_BADGE: Record<string, string> = {
-  easy:          'bg-green-100 text-green-800',
-  tempo:         'bg-orange-100 text-orange-800',
-  long:          'bg-blue-100 text-blue-800',
-  interval:      'bg-purple-100 text-purple-800',
-  rest:          'bg-gray-100 text-gray-500',
-  'cross-train': 'bg-teal-100 text-teal-800',
+  easy:          'bg-emerald-100 text-emerald-700',
+  tempo:         'bg-orange-100 text-orange-700',
+  long:          'bg-blue-100 text-blue-700',
+  interval:      'bg-violet-100 text-violet-700',
+  rest:          'bg-gray-100 text-gray-400',
+  'cross-train': 'bg-teal-100 text-teal-700',
+};
+
+// Returns bullet lines if the text is already structured (new prompt format),
+// or null if it's a plain paragraph (old format) — so the caller can render
+// it as prose instead of forcing a broken bullet split.
+function parseReasoning(text: string): string[] | null {
+  const lines = text.split('\n').map(l => l.replace(/^[•\-]\s*/, '').trim()).filter(Boolean);
+  return lines.length > 1 ? lines : null;
+}
+
+const TYPE_BORDER: Record<string, string> = {
+  easy:          'border-l-emerald-400',
+  tempo:         'border-l-orange-400',
+  long:          'border-l-blue-400',
+  interval:      'border-l-violet-400',
+  rest:          'border-l-gray-200',
+  'cross-train': 'border-l-teal-400',
+};
+
+const TYPE_DOT: Record<string, string> = {
+  easy:          'bg-emerald-400',
+  tempo:         'bg-orange-400',
+  long:          'bg-blue-400',
+  interval:      'bg-violet-400',
+  rest:          'bg-gray-200',
+  'cross-train': 'bg-teal-400',
 };
 
 function PlanView({
@@ -78,63 +106,124 @@ function PlanView({
   remaining: number | null;
   onReset: () => void;
 }) {
+  const totalMiles = plan.weeklyPlan
+    .filter(r => r.distanceMiles != null)
+    .reduce((sum, r) => sum + (r.distanceMiles ?? 0), 0);
+  const runDays = plan.weeklyPlan.filter(r => r.type !== 'rest').length;
+
   return (
-    <div className="min-h-screen bg-gray-50 py-12 px-4">
-      <div className="max-w-lg mx-auto">
-        <div className="flex items-center justify-between mb-1">
-          <h1 className="text-3xl font-bold text-gray-900">Your Plan</h1>
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white border-b border-gray-100 px-6 py-4 sticky top-0 z-10">
+        <div className="max-w-lg mx-auto flex items-center justify-between">
+          <Link href="/dashboard" className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors">
+            <span>←</span>
+            <span>Dashboard</span>
+          </Link>
           {remaining !== null && (
             <span className="text-xs text-gray-400">
               {remaining} generation{remaining !== 1 ? 's' : ''} left today
             </span>
           )}
         </div>
-        <p className="text-gray-500 text-sm mb-8">
-          Generated {new Date(plan.generatedAt).toLocaleDateString()}
-        </p>
+      </header>
 
-        <div className="space-y-3 mb-6">
+      <main className="max-w-lg mx-auto px-6 py-8 space-y-6">
+        {/* Success banner */}
+        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-5 py-4">
+          <p className="text-sm font-semibold text-emerald-700 mb-0.5">Plan generated!</p>
+          <p className="text-xs text-emerald-600">
+            {new Date(plan.generatedAt).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+          </p>
+        </div>
+
+        {/* Week at a glance */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Week at a glance</p>
+          <div className="flex justify-between mb-3">
+            {Array.from({ length: 7 }, (_, i) => {
+              const run = plan.weeklyPlan.find(r => r.dayOfWeek === i + 1);
+              return (
+                <div key={i} className="flex flex-col items-center gap-1.5">
+                  <span className="text-xs text-gray-400">{DAY_NAMES[i]}</span>
+                  <div className={`w-3 h-3 rounded-full ${run ? (TYPE_DOT[run.type] ?? 'bg-gray-200') : 'bg-gray-100'}`} />
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex gap-4 pt-3 border-t border-gray-50">
+            <div className="text-center">
+              <p className="text-lg font-bold text-gray-900">{totalMiles.toFixed(1)}</p>
+              <p className="text-xs text-gray-400">total miles</p>
+            </div>
+            <div className="text-center">
+              <p className="text-lg font-bold text-gray-900">{runDays}</p>
+              <p className="text-xs text-gray-400">active days</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Day cards */}
+        <div className="space-y-2">
           {plan.weeklyPlan.map((run) => (
             <div
               key={run.dayOfWeek}
-              className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
+              className={`bg-white rounded-xl border border-gray-100 border-l-4 shadow-sm p-4 ${TYPE_BORDER[run.type] ?? 'border-l-gray-200'}`}
             >
               <div className="flex items-center justify-between mb-1">
-                <span className="font-semibold text-gray-900">
-                  {DAY_NAMES[run.dayOfWeek - 1]}
+                <span className="font-semibold text-sm text-gray-900">
+                  {DAY_NAMES_FULL[run.dayOfWeek - 1]}
                 </span>
                 <div className="flex items-center gap-2">
-                  {run.distanceMiles && (
-                    <span className="text-sm text-gray-500">{run.distanceMiles} mi</span>
+                  {run.distanceMiles != null && (
+                    <span className="text-xs text-gray-400">{run.distanceMiles} mi</span>
                   )}
-                  <span
-                    className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${
-                      TYPE_BADGE[run.type] ?? 'bg-gray-100 text-gray-600'
-                    }`}
-                  >
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${TYPE_BADGE[run.type] ?? 'bg-gray-100 text-gray-600'}`}>
                     {run.type}
                   </span>
                 </div>
               </div>
-              <p className="text-sm text-gray-600">{run.description}</p>
+              <p className="text-sm text-gray-500 leading-snug">{run.description}</p>
             </div>
           ))}
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm mb-6">
-          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
-            Why this plan?
-          </h2>
-          <p className="text-sm text-gray-700 leading-relaxed">{plan.reasoning}</p>
+        {/* Reasoning */}
+        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Why this plan?</p>
+          {(() => {
+            const bullets = parseReasoning(plan.reasoning);
+            return bullets ? (
+              <ul className="space-y-3">
+                {bullets.map((line, i) => (
+                  <li key={i} className="flex items-start gap-3">
+                    <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                    <span className="text-sm text-gray-700 leading-relaxed">{line}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-700 leading-relaxed">{plan.reasoning}</p>
+            );
+          })()}
         </div>
 
-        <button
-          onClick={onReset}
-          className="w-full border border-gray-300 text-gray-700 font-medium py-2.5 rounded-lg hover:bg-gray-50 transition-colors"
-        >
-          Log another run
-        </button>
-      </div>
+        {/* CTAs */}
+        <div className="flex flex-col gap-3 pb-8">
+          <Link
+            href="/dashboard"
+            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium py-3 rounded-xl text-center transition-colors"
+          >
+            View Dashboard
+          </Link>
+          <button
+            onClick={onReset}
+            className="w-full border border-gray-200 text-gray-600 text-sm font-medium py-3 rounded-xl hover:bg-gray-50 transition-colors"
+          >
+            Log another run
+          </button>
+        </div>
+      </main>
     </div>
   );
 }
@@ -163,11 +252,16 @@ const EMPTY_FORM: FormFields = {
   notes: '',
 };
 
+type RateLimitError =
+  | { kind: 'burst' }
+  | { kind: 'daily'; resetsIn: number };
+
 function LogForm() {
   const [form, setForm] = useState<FormFields>(EMPTY_FORM);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [apiError, setApiError] = useState('');
+  const [rateLimit, setRateLimit] = useState<RateLimitError | null>(null);
   const [plan, setPlan] = useState<TrainingPlan | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
 
@@ -183,11 +277,13 @@ function LogForm() {
     setForm({ ...EMPTY_FORM, date: todayString() });
     setFieldErrors({});
     setApiError('');
+    setRateLimit(null);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setApiError('');
+    setRateLimit(null);
     setFieldErrors({});
 
     // ── Build numeric payload from string inputs ───────────────────────────────
@@ -274,6 +370,10 @@ function LogForm() {
             errors[String(issue.path[0])] = issue.message;
           });
           setFieldErrors(errors);
+        } else if (res.status === 429) {
+          const retryAfter = Number(res.headers.get('Retry-After') ?? 0);
+          // Burst limit has Retry-After: 60; daily limit has Retry-After up to ~86400
+          setRateLimit(retryAfter <= 60 ? { kind: 'burst' } : { kind: 'daily', resetsIn: retryAfter });
         } else {
           setApiError(data.error ?? 'Something went wrong. Please try again.');
         }
@@ -304,6 +404,23 @@ function LogForm() {
         {apiError && (
           <div className="mb-6 px-4 py-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">
             {apiError}
+          </div>
+        )}
+
+        {rateLimit?.kind === 'burst' && (
+          <div className="mb-6 px-4 py-3 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg flex items-start gap-2">
+            <span className="mt-0.5">⏳</span>
+            <span>Too many requests — wait a moment and try again.</span>
+          </div>
+        )}
+
+        {rateLimit?.kind === 'daily' && (
+          <div className="mb-6 px-4 py-3 bg-orange-50 border border-orange-200 text-orange-800 text-sm rounded-lg">
+            <p className="font-medium mb-0.5">Daily plan limit reached</p>
+            <p className="text-orange-700">
+              You&apos;ve used all 5 plan generations today. Resets at midnight UTC
+              {rateLimit.resetsIn > 0 && ` (in ~${Math.ceil(rateLimit.resetsIn / 3600)}h)`}.
+            </p>
           </div>
         )}
 
@@ -351,7 +468,7 @@ function LogForm() {
 
           <Field
             label="Avg pace"
-            hint="Optional — mm:ss /mile e.g. 8:30"
+            hint="mm:ss per mile — e.g. 8:30"
             error={fieldErrors.averagePaceMinsPerMile}
           >
             <input
@@ -361,6 +478,15 @@ function LogForm() {
               onChange={(e) => setField('averagePaceMinsPerMile', e.target.value)}
               className={inputClass(fieldErrors.averagePaceMinsPerMile)}
             />
+            {(() => {
+              const parsed = parsePace(form.averagePaceMinsPerMile);
+              if (!form.averagePaceMinsPerMile.trim() || parsed == null) return null;
+              const m = Math.floor(parsed);
+              const s = Math.round((parsed - m) * 60).toString().padStart(2, '0');
+              return (
+                <p className="mt-1 text-xs text-gray-400">= {m}:{s} min/mile</p>
+              );
+            })()}
           </Field>
 
           <div className="grid grid-cols-3 gap-3">
@@ -410,11 +536,17 @@ function LogForm() {
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || rateLimit?.kind === 'daily'}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 rounded-lg transition-colors disabled:opacity-50"
           >
             {submitting ? 'Saving & generating plan…' : 'Log run & generate plan'}
           </button>
+
+          {remaining !== null && (
+            <p className="text-center text-xs text-gray-400">
+              {remaining} plan generation{remaining !== 1 ? 's' : ''} remaining today
+            </p>
+          )}
         </form>
       </div>
     </div>

@@ -23,6 +23,11 @@ import type { TrainingPlan, UserProfile, RunLog } from '@/lib/schemas';
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+function parseReasoning(text: string): string[] | null {
+  const lines = text.split('\n').map(l => l.replace(/^[•\-]\s*/, '').trim()).filter(Boolean);
+  return lines.length > 1 ? lines : null;
+}
+
 const TYPE_BADGE: Record<string, string> = {
   easy:          'bg-emerald-100 text-emerald-700',
   tempo:         'bg-orange-100 text-orange-700',
@@ -153,6 +158,20 @@ function DashboardContent() {
       .reduce((sum, l) => sum + l.distanceMiles, 0);
   })();
 
+  const bestPace = (() => {
+    const paced = logs.filter(l => l.averagePaceMinsPerMile != null);
+    if (paced.length === 0) return null;
+    const best = Math.min(...paced.map(l => l.averagePaceMinsPerMile!));
+    return best;
+  })();
+
+  const longestRun = logs.length > 0 ? Math.max(...logs.map(l => l.distanceMiles)) : null;
+
+  const totalHours = (() => {
+    const mins = logs.reduce((sum, l) => sum + l.durationMinutes, 0);
+    return mins > 0 ? (mins / 60).toFixed(1) : null;
+  })();
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -160,9 +179,16 @@ function DashboardContent() {
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-lg font-bold text-gray-900 tracking-tight">PaceWise</h1>
-            {profile?.name && (
-              <p className="text-xs text-gray-400">Hey, {profile.name}</p>
-            )}
+            <div className="flex items-center gap-2">
+              {profile?.name && (
+                <p className="text-xs text-gray-400">Hey, {profile.name}</p>
+              )}
+              {profile?.fitnessLevel && (
+                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-600 capitalize">
+                  {profile.fitnessLevel}
+                </span>
+              )}
+            </div>
           </div>
           <Link
             href="/log"
@@ -194,13 +220,30 @@ function DashboardContent() {
             },
             {
               label: 'Runs logged',
-              value: logs.length > 0 ? logs.length : '—',
+              value: logs.length > 0 ? String(logs.length) : '—',
             },
             {
               label: 'Avg HR',
               value: hrData.length > 0
                 ? `${Math.round(hrData.reduce((s, d) => s + (d.hr ?? 0), 0) / hrData.length)} bpm`
                 : '—',
+            },
+            {
+              label: 'Best pace',
+              value: (() => {
+                if (bestPace == null) return '—';
+                const m = Math.floor(bestPace);
+                const s = Math.round((bestPace - m) * 60).toString().padStart(2, '0');
+                return `${m}:${s}/mi`;
+              })(),
+            },
+            {
+              label: 'Longest run',
+              value: longestRun != null ? `${longestRun.toFixed(1)} mi` : '—',
+            },
+            {
+              label: 'Total time',
+              value: totalHours != null ? `${totalHours} hr` : '—',
             },
           ].map(stat => (
             <div key={stat.label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 sm:p-4 text-center">
@@ -317,11 +360,25 @@ function DashboardContent() {
               ))}
             </div>
 
-            <div className="rounded-xl bg-indigo-50 border border-indigo-100 p-4">
-              <p className="text-xs font-semibold text-indigo-400 uppercase tracking-wide mb-1.5">
+            <div className="rounded-xl bg-white border border-gray-100 p-4">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
                 Why this plan?
               </p>
-              <p className="text-sm text-indigo-900 leading-relaxed">{plan.reasoning}</p>
+              {(() => {
+                const bullets = parseReasoning(plan.reasoning);
+                return bullets ? (
+                  <ul className="space-y-2.5">
+                    {bullets.map((line, i) => (
+                      <li key={i} className="flex items-start gap-2.5">
+                        <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                        <span className="text-sm text-gray-600 leading-snug">{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-gray-600 leading-relaxed">{plan.reasoning}</p>
+                );
+              })()}
             </div>
           </SectionCard>
         ) : (

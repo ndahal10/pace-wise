@@ -40,8 +40,58 @@ const ClaudeOutputSchema = z.object({
 // no cron job needed to reset it.
 
 const DAILY_PLAN_LIMIT = 5;
+const BURST_LIMIT = 3;        // requests per user per minute
+const BURST_WINDOW_MS = 60_000;
 
-async function checkRateLimit(
+// ─── Burst rate limiter ───────────────────────────────────────────────────────
+//
+// Stored at: users/{uid}/usage/burst  →  { windowStart: number, count: number }
+//
+// A single doc per user tracks a 1-minute sliding window. On each request we
+// read the doc inside a transaction and either:
+//   a) reset the window (if more than 60 s have passed since windowStart), or
+//   b) increment the counter.
+// If the counter is already at the limit we return { allowed: false } without
+// incrementing — the window keeps ticking so the user gets access again as
+// soon as the 60 s elapses.
+//
+// Using a single doc (rather than per-minute document keys) avoids unbounded
+// doc accumulation while still being atomically safe.
+
+async function checkBurstLimit(uid: string): Promise<{ allowed: boolean }> {
+  const burstRef = getAdminDb().doc(`users/${uid}/usage/burst`);
+  const now = Date.now();
+
+  return getAdminDb().runTransaction(async (tx) => {
+    const snap = await tx.get(burstRef);
+
+    let windowStart: number;
+    let count: number;
+
+    if (!snap.exists) {
+      windowStart = now;
+      count = 0;
+    } else {
+      const data = snap.data()!;
+      windowStart = data.windowStart as number;
+      count = data.count as number;
+
+      if (now - windowStart >= BURST_WINDOW_MS) {
+        windowStart = now;
+        count = 0;
+      }
+    }
+
+    if (count >= BURST_LIMIT) {
+      return { allowed: false };
+    }
+
+    tx.set(burstRef, { windowStart, count: count + 1 });
+    return { allowed: true };
+  });
+}
+
+async function checkDailyPlanLimit(
   uid: string,
   today: string
 ): Promise<{ allowed: boolean; remaining: number }> {
@@ -114,7 +164,20 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── Step 2: Validate request body against RunLog schema ─────────────────────
+  // ── Step 2: Burst rate limit ─────────────────────────────────────────────────
+  //
+  // Checked before any reads or writes so a burst attacker never touches
+  // Firestore data or the Claude API. Retry-After: 60 tells well-behaved
+  // clients exactly when to try again.
+  const burst = await checkBurstLimit(uid);
+  if (!burst.allowed) {
+    return NextResponse.json(
+      { error: `Too many requests — max ${BURST_LIMIT} per minute.` },
+      { status: 429, headers: { "Retry-After": "60" } }
+    );
+  }
+
+  // ── Step 3: Validate request body against RunLog schema ─────────────────────
   //
   // safeParse never throws — it returns { success, data } or { success, error }.
   // We use it here so we can return a structured 422 with the exact validation
@@ -136,58 +199,16 @@ export async function POST(req: NextRequest) {
 
   const log = parsed.data;
 
-  // ── Step 3: Save log to users/{uid}/logs/{YYYY-MM-DD} ───────────────────────
+  // ── Step 4: Fetch profile ────────────────────────────────────────────────────
   //
-  // Using the date as the document ID (rather than addDoc's auto-id) means one
-  // document per calendar day. A second log on the same day overwrites the
-  // first — a deliberate choice for simplicity. If you later want multiple logs
-  // per day, switch to addDoc and use a subcollection or composite key.
-  //
-  // savedAt is stored as an ISO string (not serverTimestamp) so it survives
-  // JSON serialization without the stripTimestamps treatment.
-  await getAdminDb().doc(`users/${uid}/logs/${log.date}`).set({
-    ...log,
-    savedAt: new Date().toISOString(),
-  });
-
-  // ── Steps 4 & 5: Fetch profile and last 14 logs in parallel ─────────────────
-  //
-  // Promise.all runs both Firestore reads concurrently — no reason to wait for
-  // the profile before starting the logs query.
-  //
-  // Profile is at users/{uid} (the user document itself, not a subcollection).
-  // Logs are ordered by date descending so index 0 is always the most recent.
-  const [profileSnap, logsSnap] = await Promise.all([
-    getAdminDb().doc(`users/${uid}`).get(),
-    getAdminDb()
-      .collection(`users/${uid}/logs`)
-      .orderBy("date", "desc")
-      .limit(14)
-      .get(),
-  ]);
-
+  // Fetched before saving the log so we can gate on profile existence without
+  // having already written to Firestore. A profileless request is rejected here
+  // without consuming a rate-limit slot or touching the logs subcollection.
+  const profileSnap = await getAdminDb().doc(`users/${uid}`).get();
   const profile = profileSnap.exists
     ? (stripTimestamps(profileSnap.data() as Record<string, unknown>) as UserProfile)
     : null;
 
-  const recentLogs = logsSnap.docs.map(
-    (d) => stripTimestamps(d.data() as Record<string, unknown>) as RunLog
-  );
-
-  // ── Step 6: Call Claude ───────────────────────────────────────────────────────
-  //
-  // We only call Claude if the user has a profile — without it the prompt has
-  // no meaningful athlete data to work from.
-  //
-  // messages.parse() with zodOutputFormat does two things:
-  //   1. Sends a JSON Schema derived from ClaudeOutputSchema to the API via
-  //      output_config.format, constraining Claude to output valid JSON.
-  //   2. Validates the parsed response client-side against the full Zod schema
-  //      (including constraints the JSON Schema spec can't express, like max()).
-  //
-  // adaptive thinking lets Claude decide how much reasoning to apply — useful
-  // for plan generation which benefits from multi-step thinking without
-  // requiring a fixed token budget.
   if (!profile) {
     return NextResponse.json(
       { error: "Complete your profile before generating a plan" },
@@ -195,15 +216,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── Step 6a: Rate limit check ────────────────────────────────────────────────
+  // ── Step 5: Daily plan limit check ───────────────────────────────────────────
   //
-  // Checked after the profile guard so we don't burn a rate limit slot on a
-  // request that would fail anyway. The transaction increments the counter
-  // optimistically — if the Claude call later fails, the count is still
-  // incremented. This is intentional: it prevents retrying past the limit by
-  // just hammering the endpoint on errors.
+  // Checked before saving the log so a user who has hit the daily cap does not
+  // get their log overwritten by a request that will ultimately fail. The
+  // transaction increments the counter optimistically — if the Claude call
+  // later fails, the count is still incremented. This is intentional: it
+  // prevents retrying past the limit by hammering the endpoint on errors.
   const today = new Date().toISOString().slice(0, 10);
-  const { allowed, remaining } = await checkRateLimit(uid, today);
+  const { allowed, remaining } = await checkDailyPlanLimit(uid, today);
 
   if (!allowed) {
     // Retry-After: seconds until midnight UTC so clients know when to try again
@@ -221,6 +242,32 @@ export async function POST(req: NextRequest) {
       }
     );
   }
+
+  // ── Step 6: Save log to users/{uid}/logs/{YYYY-MM-DD} ───────────────────────
+  //
+  // All checks have passed — now it is safe to write. Using the date as the
+  // document ID means one document per calendar day. A second log on the same
+  // day overwrites the first — a deliberate simplicity choice.
+  //
+  // savedAt is stored as an ISO string (not serverTimestamp) so it survives
+  // JSON serialization without the stripTimestamps treatment.
+  await getAdminDb().doc(`users/${uid}/logs/${log.date}`).set({
+    ...log,
+    savedAt: new Date().toISOString(),
+  });
+
+  // ── Step 7: Fetch last 14 logs ───────────────────────────────────────────────
+  //
+  // Ordered by date descending so index 0 is always the most recent.
+  const logsSnap = await getAdminDb()
+    .collection(`users/${uid}/logs`)
+    .orderBy("date", "desc")
+    .limit(14)
+    .get();
+
+  const recentLogs = logsSnap.docs.map(
+    (d) => stripTimestamps(d.data() as Record<string, unknown>) as RunLog
+  );
 
   const logsForPrompt = recentLogs.length > 0 ? recentLogs : [log];
   const { system, user } = buildPrompt(profile, logsForPrompt);
