@@ -113,3 +113,11 @@ npm run dev
 Open [http://localhost:3000](http://localhost:3000).
 
 ---
+
+## Roadmap
+
+- [ ] Background plan generation via Upstash QStash (decouple AI call from HTTP response)
+- [ ] Computed training load metrics (rolling weekly mileage, acute:chronic ratio)
+- [ ] Sentry integration for observability and prompt error tracking
+
+
